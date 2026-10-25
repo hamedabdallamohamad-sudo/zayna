@@ -1,6 +1,11 @@
 // واجهة متجر زينة — المنتجات والطلبات من Firebase
-import { WHATSAPP_NUMBER, CATEGORIES, CURRENCY } from './config.js';
+import { WHATSAPP_NUMBER as DEF_WA, CATEGORIES as DEF_CATS, CURRENCY as DEF_CUR } from './config.js';
 import * as db from './firebase.js';
+
+// القيم الافتراضية من config.js، وتتغير من لوحة التحكم (إعدادات المتجر) دون لمس الكود
+let WHATSAPP_NUMBER = DEF_WA, CURRENCY = DEF_CUR, CATEGORIES = { ...DEF_CATS };
+const defaultCats = () => Object.entries(DEF_CATS).map(([id, name]) => ({ id, name }));
+let catList = defaultCats();
 
 /* ---------- أدوات ---------- */
 const $ = id => document.getElementById(id);
@@ -220,7 +225,8 @@ function confirmOrder(e) {
     const total = items.reduce((s, i) => s + i.price * i.qty, 0);
     const orderNo = 'Z-' + Date.now().toString(36).toUpperCase();
     const lines = items.map(i => `• ${i.name} ×${i.qty} = ${money(i.price * i.qty)}`);
-    const text = `مرحباً زينة 👋\nأرغب بإتمام الطلب رقم ${orderNo}:\n${lines.join('\n')}\n\nالمجموع: ${money(total)}\n\n` +
+    const greet = state.settings?.orderGreeting?.trim() || `مرحباً ${state.settings?.storeName || 'زينة'} 👋`;
+    const text = `${greet}\nأرغب بإتمام الطلب رقم ${orderNo}:\n${lines.join('\n')}\n\nالمجموع: ${money(total)}\n\n` +
         `بيانات العميل:\nالاسم: ${customer.name}\nالجوال: ${customer.phone}\nالمدينة: ${customer.city}\nالعنوان: ${customer.address}` +
         (customer.notes ? `\nملاحظات: ${customer.notes}` : '');
     // حفظ الطلب في Firestore (لا نمنع واتساب إن فشل الحفظ)
@@ -467,6 +473,9 @@ function initSiteUI() {
         }
     }
     if (!$('socialLinks')) $('whatsappFooterLink')?.insertAdjacentHTML('afterend', '<div id="socialLinks" class="flex flex-wrap gap-2 mt-3 justify-center md:justify-start"></div>');
+    const ensure = (ids, sel) => { if (!ids.some($)) document.querySelector(sel)?.setAttribute('id', ids[0]); };
+    ensure(['heroTitle'], '#storeView section h1'); ensure(['heroDescription'], '#storeView section h1 + p'); ensure(['heroImage'], '#storeView section img');
+    ensure(['storeTaglineText', 'siteTagline'], 'header span.text-xs.text-rose-700'); ensure(['footerStoreDescription', 'footerDesc'], 'footer p');
     if (!$('siteName')) document.querySelector('header span.text-2xl.font-extrabold')?.setAttribute('id', 'siteName');
     if (!$('bannerSection')) $('products')?.insertAdjacentHTML('beforebegin', '<section id="bannerSection" class="hidden w-full m-0 p-0"></section>');
 }
@@ -481,6 +490,16 @@ function renderSite(c = {}) {
     if ($('siteName') && c.storeName) $('siteName').textContent = c.storeName;
     if ($('socialLinks')) $('socialLinks').innerHTML = Object.entries(SOCIALS).filter(([k]) => /^https:\/\//i.test(c.social?.[k] || '')).map(([k, [icon, label, bg, fg]]) =>
         `<a href="${esc(c.social[k])}" target="_blank" rel="noopener" title="${label}" style="background:${bg};color:${fg}" class="flex items-center gap-2 px-3.5 py-2 rounded-full text-xs font-bold border border-white/20 hover:opacity-85 transition"><i class="${icon} text-base"></i><span>${label}</span></a>`).join('');
+    // نصوص الواجهة (إن تُركت فارغة تعود القيمة الأصلية في الصفحة)
+    const pick = (...ids) => ids.map($).find(Boolean);
+    const setText = (el, v) => { if (!el) return; el.dataset.def ??= el.textContent; el.textContent = v || el.dataset.def; };
+    setText(pick('storeTaglineText', 'siteTagline'), c.tagline);
+    setText(pick('heroTitle'), c.heroTitle);
+    setText(pick('heroDescription'), c.heroDescription);
+    setText(pick('footerStoreDescription', 'footerDesc'), c.footerDescription);
+    const hi = pick('heroImage'); if (hi) { hi.dataset.def ??= hi.getAttribute('src'); hi.src = c.heroImage ? img(c.heroImage) : hi.dataset.def; }
+    const fn = $('footerStoreName');
+    if (fn && c.storeName) { const t = [...fn.childNodes].reverse().find(n => n.nodeType === 3 && n.textContent.trim()); if (t) t.textContent = ' ' + c.storeName + ' '; }
     const sec = $('bannerSection'); if (!sec) return;
     const list = Array.isArray(c.banners) ? c.banners : [];
     clearInterval(bannerTimer);
@@ -493,47 +512,134 @@ function renderSite(c = {}) {
     }
 }
 
+// تطبيق القيم المحفوظة: رقم الواتساب والعملة والفئات
+function applyConfig(c = {}) {
+    WHATSAPP_NUMBER = String(c.whatsapp || '').replace(/\D/g, '') || DEF_WA;
+    CURRENCY = (c.currency || '').trim() || DEF_CUR;
+    catList = Array.isArray(c.categories) && c.categories.length ? c.categories.filter(x => x && x.id && x.name) : defaultCats();
+    CATEGORIES = Object.fromEntries(catList.map(x => [x.id, x.name]));
+    const wa = $('whatsappFooterLink'); if (wa) wa.href = `https://wa.me/${WHATSAPP_NUMBER}`;
+}
+
+// بناء كل أماكن عرض الفئات من القائمة المحفوظة (المتجر)
+function renderCategories() {
+    const list = catList, all = [['all', 'الكل'], ...list.map(c => [c.id, c.name])];
+    const nav = $('storeNav');
+    if (nav) {
+        const quiz = [...nav.querySelectorAll('button')].find(b => /openQuiz/.test(b.getAttribute('onclick') || ''));
+        nav.querySelectorAll('button').forEach(b => { if (b !== quiz) b.remove(); });
+        const html = all.map(([id, n]) => `<button onclick="filterCategory('${esc(id)}')" class="hover:text-rose-700 transition py-1 border-b-2 border-transparent hover:border-rose-600">${esc(n)}</button>`).join('');
+        quiz ? quiz.insertAdjacentHTML('beforebegin', html) : nav.insertAdjacentHTML('beforeend', html);
+    }
+    const first = document.querySelector('.category-btn');
+    if (first) first.parentElement.innerHTML = all.map(([id, n]) => `<button onclick="filterCategory('${esc(id)}')" class="category-btn bg-stone-200 text-stone-700 hover:bg-stone-300 px-4 py-2 rounded-full font-medium transition" data-cat="${esc(id)}">${esc(n)}</button>`).join('');
+    const ul = document.querySelector('footer ul');
+    if (ul) ul.innerHTML = all.map(([id, n]) => `<li><a href="#products" onclick="filterCategory('${esc(id)}')" class="hover:text-rose-400 transition">${esc(n)}</a></li>`).join('');
+    const quizBtns = [...document.querySelectorAll('#quizModal button[onclick^="recommendProduct"]')];
+    if (quizBtns.length) {
+        const host = quizBtns[0].parentElement; quizBtns.forEach(b => b.remove());
+        host.insertAdjacentHTML('beforeend', list.map(c => `<button onclick="recommendProduct('${esc(c.id)}')" class="w-full text-right p-4 rounded-xl border border-stone-200 hover:border-rose-500 hover:bg-rose-50/50 transition flex items-center justify-between group"><span class="font-medium text-stone-800">${esc(c.name)}</span><i class="fa-solid fa-angle-left text-stone-400 group-hover:text-rose-600 transition"></i></button>`).join(''));
+    }
+    if (!list.some(c => c.id === state.category)) state.category = 'all';
+    filterCategory(state.category);
+}
+// قائمة الفئات في نموذج المنتج (لوحة التحكم)
+function renderFormCategories() {
+    const sel = $('formCategory'); if (!sel) return;
+    const cur = sel.value;
+    sel.innerHTML = catList.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
+    if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
+}
+
 // تبويب «إعدادات المتجر» داخل لوحة التحكم
 function initSettingsUI() {
     const tabBtn = $('tabBtnOrders'), after = $('adminOrdersTab'); if (!tabBtn || !after) return;
     const file = 'text-xs file:ml-3 file:py-2 file:px-4 file:rounded-xl file:border-0 file:bg-rose-50 file:text-rose-700 file:font-bold hover:file:bg-rose-100';
+    const inp = 'w-full px-3 py-2 border border-stone-300 rounded-xl text-sm focus:ring-2 focus:ring-rose-500 focus:outline-none';
+    const lbl = (t, hint = '') => `<label class="block text-xs font-bold text-stone-700 mb-1">${t}${hint ? ` <span class="font-normal text-stone-400">${hint}</span>` : ''}</label>`;
+    const fld = (id, t, ph = '', hint = '', extra = '') => `<div>${lbl(t, hint)}<input id="${id}" oninput="markDirty()" ${extra} placeholder="${ph}" class="${inp}"></div>`;
+    const area = (id, t, rows, ph = '') => `<div>${lbl(t)}<textarea id="${id}" rows="${rows}" oninput="markDirty()" placeholder="${ph}" class="${inp}"></textarea></div>`;
+    const sec = (t, body) => `<section class="bg-white rounded-2xl border border-stone-200 shadow-sm p-6 space-y-5"><h4 class="font-extrabold text-stone-900 border-b border-stone-100 pb-2">${t}</h4>${body}</section>`;
     tabBtn.insertAdjacentHTML('afterend', `<button id="tabBtnSettings" onclick="switchAdminTab('settings')" class="${tabBtn.className}">إعدادات المتجر</button>`);
     after.insertAdjacentHTML('afterend', `
-    <div id="adminSettingsTab" class="hidden bg-white rounded-2xl border border-stone-200 shadow-sm p-6 space-y-6 max-w-2xl">
-      <div><label class="block text-xs font-bold text-stone-700 mb-1">اسم المتجر</label>
-        <input id="setName" oninput="markDirty()" maxlength="40" placeholder="Zayna | زينة" class="w-full px-3 py-2 border border-stone-300 rounded-xl text-sm focus:ring-2 focus:ring-rose-500 focus:outline-none"></div>
-      <div><label class="block text-xs font-bold text-stone-700 mb-2">الشعار (يفضّل مربّعاً بخلفية شفافة PNG)</label>
-        <div id="setLogoBox" class="flex items-center gap-3 mb-2"></div>
-        <input type="file" accept="image/*" onchange="handleLogo(this)" class="${file}"></div>
-      <div><label class="block text-xs font-bold text-stone-700 mb-2">البنرات (حتى 3 — تتبدّل تلقائياً، مقاس مقترح 1200×500)</label>
-        <div id="setBannerBox" class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-2"></div>
-        <input type="file" accept="image/*" multiple onchange="handleBanners(this)" class="${file}"></div>
-      <div><label class="block text-xs font-bold text-stone-700 mb-2">وسائل التواصل <span class="font-normal text-stone-400">(رابط كامل يبدأ بـ https:// — اتركي الفارغ لإخفائه)</span></label>
-        <div class="space-y-2">${Object.entries(SOCIALS).map(([k, [icon, l]]) => `<div class="flex items-center gap-2"><i class="${icon} w-6 text-center text-stone-500"></i>
-          <input id="soc_${k}" oninput="markDirty()" dir="ltr" placeholder="https://... (${l})" class="w-full px-3 py-2 border border-stone-300 rounded-xl text-sm focus:ring-2 focus:ring-rose-500 focus:outline-none"></div>`).join('')}</div></div>
-      <button onclick="saveSettings()" class="bg-stone-900 hover:bg-rose-700 text-white font-bold px-6 py-3 rounded-xl transition">حفظ الإعدادات</button>
+    <div id="adminSettingsTab" class="hidden space-y-6 max-w-3xl">
+      <p class="text-xs text-stone-500">اترك أي خانة نصية فارغة لتعود القيمة الأصلية في الموقع. ثم اضغط «حفظ الإعدادات» في الأسفل.</p>
+      ${sec('الهوية', `
+        ${fld('setName', 'اسم المتجر', 'Zayna | زينة')}
+        ${fld('setTagline', 'الجملة تحت الاسم', 'عالم الأناقة والإكسسوارات')}
+        <div>${lbl('الشعار', '(يفضّل مربّعاً بخلفية شفافة PNG)')}<div id="setLogoBox" class="flex items-center gap-3 mb-2"></div><input type="file" accept="image/*" onchange="handleLogo(this)" class="${file}"></div>
+        <div>${lbl('البنرات', '(حتى 3 — تتبدّل تلقائياً، مقاس مقترح 1200×500)')}<div id="setBannerBox" class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-2"></div><input type="file" accept="image/*" multiple onchange="handleBanners(this)" class="${file}"></div>
+        <div>${lbl('وسائل التواصل', '(رابط كامل يبدأ بـ https:// — اتركي الفارغ لإخفائه)')}<div class="space-y-2">${Object.entries(SOCIALS).map(([k, [icon, l]]) => `<div class="flex items-center gap-2"><i class="${icon} w-6 text-center text-stone-500"></i><input id="soc_${k}" oninput="markDirty()" dir="ltr" placeholder="https://... (${l})" class="${inp}"></div>`).join('')}</div></div>`)}
+      ${sec('الواجهة الرئيسية', `
+        ${fld('setHeroTitle', 'العنوان الكبير', 'بريقٌ يكمّل إطلالتكِ الساحرة')}
+        ${area('setHeroDesc', 'وصف الواجهة', 3)}
+        <div>${lbl('صورة الواجهة', '(اختياري)')}<div id="setHeroBox" class="flex items-center gap-3 mb-2"></div><input type="file" accept="image/*" onchange="handleHero(this)" class="${file}"></div>
+        ${area('setFooterDesc', 'وصف المتجر في أسفل الموقع', 2)}`)}
+      ${sec('الطلب والتواصل', `
+        ${fld('setWhatsapp', 'رقم واتساب المتجر', '249XXXXXXXXX', '(مع رمز الدولة وبدون + أو 00)', 'dir="ltr" inputmode="numeric"')}
+        ${fld('setCurrency', 'رمز العملة', 'ج.س', '(يظهر بجانب كل سعر)', 'maxlength="10"')}
+        ${fld('setGreeting', 'سطر الترحيب في رسالة الطلب', 'مرحباً زينة 👋', '(أول سطر في رسالة واتساب)', 'maxlength="80"')}`)}
+      ${sec('الفاتورة', `
+        ${fld('setInvTag', 'الجملة تحت اسم المتجر في الفاتورة', 'إكسسوارات نسائية أنيقة', '', 'maxlength="80"')}
+        ${fld('setInvThanks', 'عبارة الشكر في أسفل الفاتورة', 'شكراً لثقتكم بنا — يسعدنا خدمتكم دائماً 💎', '', 'maxlength="120"')}`)}
+      ${sec('الفئات', `<p class="text-xs text-stone-500 -mt-2">أضيفي فئة أو غيّري اسمها أو رتّبيها بالأسهم. لا يمكن حذف فئة فيها منتجات.</p>
+        <div id="setCatBox" class="space-y-2"></div>
+        <button type="button" onclick="addCat()" class="text-sm font-bold text-rose-700 hover:text-rose-900"><i class="fa-solid fa-plus ml-1"></i> إضافة فئة</button>`)}
+      <button onclick="saveSettings()" class="bg-stone-900 hover:bg-rose-700 text-white font-bold px-8 py-3.5 rounded-xl transition shadow-lg">حفظ الإعدادات</button>
     </div>`);
 }
+let sHero = '', sCats = [];
 function renderSettingsImages() {
     if (!$('setLogoBox')) return;
     $('setLogoBox').innerHTML = sLogo
         ? `<img src="${img(sLogo)}" alt="" class="w-16 h-16 rounded-full object-cover border border-stone-200 bg-stone-50"><button type="button" onclick="removeLogo()" class="text-xs text-red-600 underline">حذف الشعار</button>`
         : '<p class="text-xs text-stone-400">لا يوجد شعار</p>';
+    $('setHeroBox').innerHTML = sHero
+        ? `<img src="${img(sHero)}" alt="" class="w-24 h-24 rounded-xl object-cover border border-stone-200"><button type="button" onclick="removeHero()" class="text-xs text-red-600 underline">حذف الصورة (تعود الأصلية)</button>`
+        : '<p class="text-xs text-stone-400">الصورة الأصلية في الموقع</p>';
     $('setBannerBox').innerHTML = sBanners.map((b, i) => `<div class="relative"><img src="${img(b)}" alt="" class="w-full aspect-[16/7] object-cover rounded-xl border border-stone-200">
       <button type="button" onclick="removeBanner(${i})" class="absolute -top-1.5 -left-1.5 w-5 h-5 rounded-full bg-red-600 text-white text-xs leading-5">×</button></div>`).join('')
         || '<p class="text-xs text-stone-400">لا توجد بنرات</p>';
 }
+function renderCatEditor() {
+    const box = $('setCatBox'); if (!box) return;
+    const b = 'w-9 h-9 rounded-lg border border-stone-300 hover:bg-stone-100 text-stone-600 text-sm';
+    box.innerHTML = sCats.map((c, i) => `<div class="flex items-center gap-2">
+      <input value="${esc(c.name)}" oninput="renameCat(${i}, this.value)" maxlength="30" placeholder="اسم الفئة" class="flex-1 px-3 py-2 border border-stone-300 rounded-xl text-sm focus:ring-2 focus:ring-rose-500 focus:outline-none">
+      <button type="button" onclick="moveCat(${i},-1)" class="${b}" title="أعلى"><i class="fa-solid fa-arrow-up"></i></button>
+      <button type="button" onclick="moveCat(${i},1)" class="${b}" title="أسفل"><i class="fa-solid fa-arrow-down"></i></button>
+      <button type="button" onclick="removeCat(${i})" class="${b} text-red-600" title="حذف"><i class="fa-solid fa-trash-can"></i></button></div>`).join('');
+}
+const addCat = () => { sCats.push({ id: 'cat_' + Date.now().toString(36), name: '' }); markDirty(); renderCatEditor(); $('setCatBox').lastElementChild?.querySelector('input')?.focus(); };
+const renameCat = (i, v) => { sCats[i].name = v; markDirty(); };
+const moveCat = (i, d) => { const j = i + d; if (j < 0 || j >= sCats.length) return; [sCats[i], sCats[j]] = [sCats[j], sCats[i]]; markDirty(); renderCatEditor(); };
+function removeCat(i) {
+    const c = sCats[i], n = state.products.filter(p => p.category === c.id).length;
+    if (n) return toast(`لا يمكن حذف «${c.name || 'الفئة'}» لأن فيها ${n} منتج. انقليها لفئة أخرى أولاً`, true);
+    sCats.splice(i, 1); markDirty(); renderCatEditor();
+}
 function fillSettings() {
     const c = state.settings || {};
     if (!$('setName')) return;
-    $('setName').value = c.storeName || ''; sLogo = c.logo || ''; sBanners = Array.isArray(c.banners) ? [...c.banners] : [];
+    const val = (id, v) => { const e = $(id); if (e) e.value = v || ''; };
+    val('setName', c.storeName); val('setTagline', c.tagline); val('setHeroTitle', c.heroTitle); val('setHeroDesc', c.heroDescription);
+    val('setFooterDesc', c.footerDescription); val('setWhatsapp', c.whatsapp); val('setCurrency', c.currency); val('setGreeting', c.orderGreeting);
+    val('setInvTag', c.invoiceTagline); val('setInvThanks', c.invoiceThanks);
+    sLogo = c.logo || ''; sHero = c.heroImage || ''; sBanners = Array.isArray(c.banners) ? [...c.banners] : [];
+    sCats = (Array.isArray(c.categories) && c.categories.length ? c.categories : defaultCats()).map(x => ({ ...x }));
     Object.keys(SOCIALS).forEach(k => { const i = $('soc_' + k); if (i) i.value = c.social?.[k] || ''; });
-    renderSettingsImages();
+    renderSettingsImages(); renderCatEditor();
 }
 async function handleLogo(input) {
     const f = input.files[0]; if (!f) return;
     try { sLogo = await compress(f, { max: 300, mime: 'image/png', limit: 120000 }); markDirty(); renderSettingsImages(); }
     catch { toast('تعذّرت معالجة الشعار، جرّبي صورة أخرى', true); }
+    input.value = '';
+}
+async function handleHero(input) {
+    const f = input.files[0]; if (!f) return;
+    try { sHero = await compress(f, { max: 900, limit: 150000 }); markDirty(); renderSettingsImages(); }
+    catch { toast('تعذّرت معالجة الصورة، جرّبي صورة أخرى', true); }
     input.value = '';
 }
 async function handleBanners(input) {
@@ -545,19 +651,30 @@ async function handleBanners(input) {
     input.value = ''; renderSettingsImages();
 }
 const removeLogo = () => { sLogo = ''; markDirty(); renderSettingsImages(); };
+const removeHero = () => { sHero = ''; markDirty(); renderSettingsImages(); };
 const removeBanner = i => { sBanners.splice(i, 1); markDirty(); renderSettingsImages(); };
 async function saveSettings() {
-    if ((sLogo + sBanners.join('')).length > 900000) return toast('حجم الصور كبير، احذفي بنراً', true);
+    const g = id => ($(id)?.value || '').trim();
+    if ((sLogo + sHero + sBanners.join('')).length > 900000) return toast('حجم الصور كبير، احذفي بنراً أو صورة', true);
     const social = {};
     for (const k of Object.keys(SOCIALS)) {
-        const v = ($('soc_' + k)?.value || '').trim();
+        const v = g('soc_' + k);
         if (v && !/^https:\/\//i.test(v)) return toast(`رابط ${SOCIALS[k][1]} يجب أن يبدأ بـ https://`, true);
         social[k] = v;
     }
+    const whatsapp = g('setWhatsapp').replace(/\D/g, '');
+    if (whatsapp && !/^\d{8,15}$/.test(whatsapp)) return toast('رقم واتساب غير صحيح — اكتبيه مع رمز الدولة', true);
+    if (!sCats.length) return toast('يجب أن تبقى فئة واحدة على الأقل', true);
+    if (sCats.some(c => !c.name.trim())) return toast('اكتبي اسماً لكل فئة أو احذفي الفارغة', true);
     try {
-        await db.saveSettings({ storeName: $('setName').value.trim(), logo: sLogo, banners: sBanners, social });
+        await db.saveSettings({
+            storeName: g('setName'), tagline: g('setTagline'), logo: sLogo, banners: sBanners, social,
+            heroTitle: g('setHeroTitle'), heroDescription: g('setHeroDesc'), heroImage: sHero, footerDescription: g('setFooterDesc'),
+            whatsapp, currency: g('setCurrency'), orderGreeting: g('setGreeting'), invoiceTagline: g('setInvTag'), invoiceThanks: g('setInvThanks'),
+            categories: sCats.map(c => ({ id: c.id, name: c.name.trim() }))
+        });
         setDirty = false; toast('تم حفظ الإعدادات ✨');
-    } catch { toast('تعذّر الحفظ — تأكدي من نشر قواعد Firestore الجديدة', true); }
+    } catch { toast('تعذّر الحفظ — تأكدي من نشر قواعد Firestore ومن حجم الصور', true); }
 }
 
 /* ---------- إدارة الطلبات ---------- */
@@ -647,7 +764,7 @@ function printInvoice(id) {
       <div class="page">
         <div class="bar"></div>
         <div class="head">
-          <div class="brand">${st.logo ? `<img src="${img(st.logo)}" alt="">` : ''}<div><h1>${name}</h1><small>إكسسوارات نسائية أنيقة</small></div></div>
+          <div class="brand">${st.logo ? `<img src="${img(st.logo)}" alt="">` : ''}<div><h1>${name}</h1><small>${esc(st.invoiceTagline || 'إكسسوارات نسائية أنيقة')}</small></div></div>
           <div class="title"><h2>فاتورة</h2><p>INVOICE</p></div>
         </div>
         <div class="cards">
@@ -656,7 +773,7 @@ function printInvoice(id) {
         </div>
         <table><thead><tr><th>#</th><th>الصنف</th><th>الكمية</th><th>السعر</th><th>الإجمالي</th></tr></thead><tbody>${rows}</tbody></table>
         <div class="tot"><div class="grand"><span>المجموع الكلي</span><span>${money(o.total)}</span></div></div>
-        <div class="foot">شكراً لثقتكم بنا — يسعدنا خدمتكم دائماً 💎<span>للتواصل والاستفسار</span><span class="ph">${phone}</span></div>
+        <div class="foot">${esc(st.invoiceThanks || 'شكراً لثقتكم بنا — يسعدنا خدمتكم دائماً 💎')}<span>للتواصل والاستفسار</span><span class="ph">${phone}</span></div>
       </div></body></html>`);
     w.document.close();
     (w.document.fonts?.ready || Promise.resolve()).then(() => setTimeout(() => w.print(), 400));
@@ -684,7 +801,12 @@ db.watchProducts(list => {
     }
 }, () => { state.loaded = true; renderStore(); toast('تعذّر تحميل المنتجات — راجعي إعدادات Firebase', true); });
 
-db.watchSettings(c => { state.settings = c; renderSite(c); if (!setDirty) fillSettings(); }, () => {});
+db.watchSettings(c => {
+    state.settings = c; applyConfig(c); renderSite(c);
+    if (Array.isArray(c.categories) && c.categories.length) renderCategories();   // الفئات المخصّصة فقط، وإلا تبقى فئات الصفحة كما هي
+    renderFormCategories(); renderStore(); renderCart(); renderAdmin(); renderOrders();
+    if (!setDirty) fillSettings();
+}, () => {});
 
 db.onAuth(user => {
     if (!ADMIN_PAGE) return;   // المتجر لا يتعامل مع الدخول إطلاقاً
@@ -699,7 +821,7 @@ db.onAuth(user => {
 });
 
 const wa = $('whatsappFooterLink');
-if (wa) wa.href = `https://wa.me/${WHATSAPP_NUMBER}`;
+if (wa) wa.href = `https://wa.me/${WHATSAPP_NUMBER}`;   // تُحدَّث لاحقاً من الإعدادات
 if (ADMIN_PAGE) { initFormUI(); initOrdersUI(); initSettingsUI(); }
 else {
     // المتجر للزبائن فقط: نزيل أي أثر للوحة التحكم من الصفحة
@@ -715,4 +837,4 @@ Object.assign(window, { switchView, filterCategory, handleSearch, openProductMod
     recommendProduct, addToCart, changeQuantity, removeFromCart, toggleCart, checkoutViaWhatsApp, openAdminModal,
     closeAdminAuthModal, adminLogin, adminLogout, switchAdminTab, openProductFormModal, closeProductFormModal,
     editProduct, handleSaveProduct, deleteProduct, seedDemo, handleImageFile, makeMainImage, removeFormImage, confirmOrder, closeCheckout,
-    shareProduct, copyProductLink, markDirty, handleLogo, handleBanners, removeLogo, removeBanner, saveSettings, setStatus, setOrderFilter, printInvoice });
+    shareProduct, copyProductLink, addCat, renameCat, moveCat, removeCat, handleHero, removeHero, markDirty, handleLogo, handleBanners, removeLogo, removeBanner, saveSettings, setStatus, setOrderFilter, printInvoice });
