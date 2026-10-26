@@ -75,6 +75,32 @@ function renderStore() {
         : '<p class="col-span-full text-center text-stone-400 py-16">جارٍ تحميل المنتجات...</p>';
 }
 
+function syncMobileNavigation() {
+    const menu = $('mobileCategoryNav');
+    if (!menu) return;
+    const all = [['all', 'الكل'], ...catList.map(c => [c.id, c.name])];
+    menu.innerHTML = all.map(([id, name]) => '<button type="button" data-category="' + esc(id) + '" class="' + (state.category === id ? 'active' : '') + '">' + esc(name) + '</button>').join('');
+}
+function initMobileNavigation() {
+    const toggle = $('mobileMenuToggle'), menu = $('mobileCategoryNav');
+    if (!toggle || !menu) return;
+    toggle.addEventListener('click', () => {
+        const opening = menu.classList.contains('hidden');
+        menu.classList.toggle('hidden', !opening);
+        toggle.setAttribute('aria-expanded', String(opening));
+    });
+    menu.addEventListener('click', e => {
+        const b = e.target.closest('button[data-category]');
+        if (!b) return;
+        filterCategory(b.dataset.category);
+        menu.classList.add('hidden');
+        toggle.setAttribute('aria-expanded', 'false');
+        $('products')?.scrollIntoView({ behavior: 'smooth' });
+    });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') { menu.classList.add('hidden'); toggle.setAttribute('aria-expanded', 'false'); } });
+    syncMobileNavigation();
+}
+
 function filterCategory(cat) {
     state.category = cat;
     document.querySelectorAll('.category-btn').forEach(b => {
@@ -83,6 +109,7 @@ function filterCategory(cat) {
         b.classList.toggle('bg-stone-200', !on); b.classList.toggle('text-stone-700', !on);
     });
     renderStore();
+    syncMobileNavigation();
 }
 function handleSearch() { state.query = $('searchInput').value; renderStore(); }
 
@@ -509,8 +536,26 @@ function renderSite(c = {}) {
     sec.innerHTML = list.length ? `<div class="relative w-full overflow-hidden shadow-lg bg-stone-100 aspect-[16/7] min-h-[220px] sm:min-h-[300px] lg:min-h-[420px]">${list.map((b, i) =>
         `<img src="${img(b)}" alt="بنر متجر زينة" class="banner-slide absolute inset-0 w-full h-full object-cover transition-opacity duration-700 ${i ? 'opacity-0' : ''}">`).join('')}</div>` : '';
     if (list.length > 1) {
-        const slides = sec.querySelectorAll('.banner-slide'); let n = 0;
-        bannerTimer = setInterval(() => { slides[n].classList.add('opacity-0'); n = (n + 1) % slides.length; slides[n].classList.remove('opacity-0'); }, 4500);
+        const slides = [...sec.querySelectorAll('.banner-slide')]; let n = 0;
+        const wrap = sec.firstElementChild;
+        wrap.insertAdjacentHTML('beforeend', '<div class="zayna-banner-controls"><button type="button" class="zayna-banner-prev" aria-label="البنر السابق">‹</button><div class="zayna-banner-dots" aria-label="اختيار البنر"></div><button type="button" class="zayna-banner-next" aria-label="البنر التالي">›</button></div>');
+        const dots = wrap.querySelector('.zayna-banner-dots');
+        dots.innerHTML = slides.map((_, i) => '<button type="button" aria-label="عرض البنر ' + (i + 1) + '" data-slide="' + i + '"></button>').join('');
+        const go = index => {
+            slides[n].classList.add('opacity-0');
+            n = (index + slides.length) % slides.length;
+            slides[n].classList.remove('opacity-0');
+            dots.querySelectorAll('button').forEach((b, i) => b.classList.toggle('active', i === n));
+        };
+        const restart = () => { clearInterval(bannerTimer); if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) bannerTimer = setInterval(() => go(n + 1), 5000); };
+        wrap.querySelector('.zayna-banner-prev').addEventListener('click', () => { go(n - 1); restart(); });
+        wrap.querySelector('.zayna-banner-next').addEventListener('click', () => { go(n + 1); restart(); });
+        dots.addEventListener('click', e => { const b = e.target.closest('[data-slide]'); if (b) { go(Number(b.dataset.slide)); restart(); } });
+        wrap.addEventListener('mouseenter', () => clearInterval(bannerTimer));
+        wrap.addEventListener('mouseleave', restart);
+        wrap.addEventListener('focusin', () => clearInterval(bannerTimer));
+        wrap.addEventListener('focusout', e => { if (!wrap.contains(e.relatedTarget)) restart(); });
+        go(0); restart();
     }
 }
 
@@ -544,6 +589,7 @@ function renderCategories() {
     }
     if (!list.some(c => c.id === state.category)) state.category = 'all';
     filterCategory(state.category);
+    syncMobileNavigation();
 }
 // قائمة الفئات في نموذج المنتج (لوحة التحكم)
 function renderFormCategories() {
@@ -916,7 +962,7 @@ else {
     // المتجر للزبائن فقط: نزيل أي أثر للوحة التحكم من الصفحة
     ['adminView', 'adminAuthModal', 'productFormModal'].forEach(id => $(id)?.remove());
     document.querySelectorAll('[onclick*="openAdminModal"]').forEach(e => e.remove());
-    initCheckoutUI(); initSiteUI(); initCartBar();
+    initCheckoutUI(); initSiteUI(); initCartBar(); initMobileNavigation();
     $('productModal')?.firstElementChild?.classList.add('max-h-[90vh]', 'overflow-y-auto');   // نافذة المنتج قابلة للتمرير على الجوال
 }
 filterCategory('all'); renderCart();
