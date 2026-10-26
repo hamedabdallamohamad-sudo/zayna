@@ -23,6 +23,12 @@ let formImages = [];
 const galleryOf = p => (Array.isArray(p.images) && p.images.length ? p.images : [p.image]).filter(Boolean);
 const fmt = n => Number(n || 0).toLocaleString('en-US');   // 12000 ← 12,000
 const money = n => `${fmt(n)} ${CURRENCY}`;
+const effectivePrice = p => Number(p.salePrice) > 0 && Number(p.salePrice) < Number(p.price) ? Number(p.salePrice) : Number(p.price);
+const discountRate = p => Math.round((1-effectivePrice(p)/Number(p.price || 1))*100);
+const cartSubtotal = items => items.reduce((sum,i)=>sum+effectivePrice(i)*i.qty,0);
+const activeCoupon = () => (state.settings?.coupons || []).find(c => c.active && c.code === state.couponCode && (!c.expires || Date.parse(c.expires+'T23:59:59') >= Date.now()));
+const couponDiscount = subtotal => { const c=activeCoupon(); return c ? Math.min(subtotal,c.type === 'fixed' ? Number(c.value) : subtotal*Number(c.value)/100) : 0; };
+const orderTotal = items => Math.max(0,cartSubtotal(items)-couponDiscount(cartSubtotal(items)));
 const ONERR = "this.onerror=null;this.src='images/placeholder.svg'";
 const show = id => $(id)?.classList.remove('hidden');
 const hide = id => $(id)?.classList.add('hidden');
@@ -40,7 +46,7 @@ function toast(msg, error = false) {
 /* ---------- الحالة ---------- */
 const CART_KEY = 'zayna_cart_v2';
 const loadCart = () => { try { const c = JSON.parse(localStorage.getItem(CART_KEY)); return Array.isArray(c) ? c : []; } catch { return []; } };
-const state = { products: [], loaded: false, category: 'all', query: '', cart: loadCart(), isAdmin: false, orders: [], stopOrders: null };
+const state = { products: [], loaded: false, category: 'all', query: '', cart: loadCart(), isAdmin: false, orders: [], stopOrders: null, couponCode: '' };
 const saveCart = () => { try { localStorage.setItem(CART_KEY, JSON.stringify(state.cart)); } catch {} };
 
 /* ---------- المتجر ---------- */
@@ -49,6 +55,7 @@ const card = p => `
   <div class="relative overflow-hidden aspect-square cursor-pointer" onclick="openProductModal('${esc(p.id)}')">
     <button onclick="event.stopPropagation(); shareProduct('${esc(p.id)}')" title="مشاركة عبر واتساب" class="absolute top-3 left-3 z-10 w-9 h-9 rounded-full bg-white/90 hover:bg-green-600 hover:text-white text-green-600 shadow flex items-center justify-center transition"><i class="fa-brands fa-whatsapp"></i></button>
     <img src="${img(p.image)}" alt="${esc(p.name)}" loading="lazy" onerror="${ONERR}" class="w-full h-full object-cover group-hover:scale-105 transition duration-500">
+    ${discountRate(p) ? `<span class="absolute bottom-3 right-3 bg-rose-700 text-white text-xs font-bold px-3 py-1 rounded-full">خصم ${discountRate(p)}%</span>` : ''}
     ${p.rating ? `<span class="absolute top-3 right-3 bg-stone-900/80 text-amber-300 text-xs font-bold px-2.5 py-1 rounded-full">★ ${esc(p.rating)}</span>` : ''}
   </div>
   <div class="p-5 flex flex-col flex-grow justify-between">
@@ -57,7 +64,7 @@ const card = p => `
       <p class="text-xs text-stone-500 mb-3 line-clamp-1"><i class="fa-solid fa-gem text-rose-600 ml-1"></i>${esc(p.notes)}</p>
     </div>
     <div class="flex items-center justify-between pt-3 border-t border-stone-100">
-      <span class="text-xl font-bold text-stone-900">${fmt(p.price)} <span class="text-xs text-stone-500 font-normal">${CURRENCY}</span></span>
+      <span class="text-xl font-bold text-stone-900">${fmt(effectivePrice(p))} <span class="text-xs text-stone-500 font-normal">${CURRENCY}</span></span>
       <button onclick="addToCart('${esc(p.id)}')" class="bg-stone-900 hover:bg-rose-700 text-white px-3.5 py-2 rounded-xl transition flex items-center gap-1.5 text-sm font-medium shadow-md"><i class="fa-solid fa-plus"></i> إضافة</button>
     </div>
   </div>
@@ -128,7 +135,7 @@ function openProductModal(id) {
       <div>
         <span class="text-xs font-bold text-rose-700 bg-rose-50 px-2.5 py-1 rounded-full border border-rose-200/60 inline-block mb-2">${esc(CATEGORIES[p.category] || 'إكسسوار')}</span>
         <h3 class="text-2xl font-bold text-stone-900">${esc(p.name)}</h3>
-        <p class="text-rose-800 font-bold text-2xl mt-2">${fmt(p.price)} <span class="text-sm text-stone-500 font-normal">${CURRENCY}</span></p>
+        <p class="text-rose-800 font-bold text-2xl mt-2">${fmt(effectivePrice(p))} <span class="text-sm text-stone-500 font-normal">${CURRENCY}</span></p>
         <p class="text-stone-600 text-sm mt-4 leading-relaxed">${esc(p.description)}</p>
         <div class="mt-4 p-3 bg-stone-50 rounded-xl border border-stone-100">
           <span class="text-xs font-bold text-stone-700 block mb-1">الخامة والمواد:</span>
@@ -187,18 +194,18 @@ function renderCart() {
     saveCart();
     const items = cartItems();
     $('cartCount').textContent = items.reduce((s, i) => s + i.qty, 0);
-    $('cartTotal').textContent = money(items.reduce((s, i) => s + i.price * i.qty, 0));
+    $('cartTotal').textContent = money(orderTotal(items));
     if ($('cartBar')) {
         const n = items.reduce((s, i) => s + i.qty, 0);
         $('cartBar').classList.toggle('hidden', !n);
-        $('cartBarInfo').textContent = `${n} قطعة — ${money(items.reduce((s, i) => s + i.price * i.qty, 0))}`;
+        $('cartBarInfo').textContent = `${n} قطعة — ${money(orderTotal(items))}`;
     }
     $('cartItems').innerHTML = items.length ? items.map(i => `
     <div class="flex items-center gap-4 bg-stone-50 p-3 rounded-xl border border-stone-200">
       <img src="${img(i.image)}" alt="${esc(i.name)}" onerror="${ONERR}" class="w-16 h-16 rounded-lg object-cover">
       <div class="flex-grow">
         <h4 class="font-bold text-stone-900 text-sm">${esc(i.name)}</h4>
-        <span class="text-rose-800 font-bold text-sm">${money(i.price)}</span>
+        <span class="text-rose-800 font-bold text-sm">${money(effectivePrice(i))}</span>
         <div class="flex items-center gap-2 mt-2">
           <button onclick="changeQuantity('${esc(i.id)}',-1)" class="w-6 h-6 rounded bg-stone-200 hover:bg-stone-300 text-xs font-bold">-</button>
           <span class="text-xs font-bold px-1">${i.qty}</span>
@@ -233,9 +240,11 @@ function checkoutViaWhatsApp() {
     let saved = {}; try { saved = JSON.parse(localStorage.getItem(CUSTOMER_KEY)) || {}; } catch {}
     ['Name', 'Phone', 'City', 'Address'].forEach(k => $('cust' + k).value = saved[k.toLowerCase()] || '');
     $('custNotes').value = '';
-    $('checkoutSummary').textContent = `${items.reduce((n, i) => n + i.qty, 0)} قطعة — المجموع: ${money(items.reduce((t, i) => t + i.price * i.qty, 0))}`;
+    $('checkoutSummary').textContent = `${items.reduce((n, i) => n + i.qty, 0)} قطعة — المجموع: ${money(orderTotal(items))}`;
     show('checkoutModal');
+    const couponInput=$('checkoutCoupon'); if(couponInput) couponInput.value=state.couponCode;
 }
+function applyCoupon() { const code=($('checkoutCoupon')?.value || '').trim().toUpperCase(); state.couponCode=code; const items=cartItems(); $('checkoutSummary').textContent=`${items.length} نوع — المجموع: ${money(orderTotal(items))}`; toast(!code ? 'تم حذف الكوبون' : activeCoupon() ? 'تم تطبيق الكوبون' : 'الكوبون غير صالح أو منتهي',!!code && !activeCoupon()); }
 const closeCheckout = () => hide('checkoutModal');
 
 function confirmOrder(e) {
@@ -249,18 +258,19 @@ function confirmOrder(e) {
     const digits = intlPhone(customer.phone);
     if (digits.length < 8 || digits.length > 15) return toast('رقم الجوال غير صحيح', true);
     try { localStorage.setItem(CUSTOMER_KEY, JSON.stringify({ name: customer.name, phone: customer.phone, city: customer.city, address: customer.address })); } catch {}
-    const total = items.reduce((s, i) => s + i.price * i.qty, 0);
+    const total = orderTotal(items);
+    const appliedCoupon = activeCoupon()?.code || '';
     const orderNo = 'Z-' + Date.now().toString(36).toUpperCase();
-    const lines = items.map(i => `• ${i.name} ×${i.qty} = ${money(i.price * i.qty)}`);
+    const lines = items.map(i => `• ${i.name} ×${i.qty} = ${money(effectivePrice(i) * i.qty)}`);
     const greet = state.settings?.orderGreeting?.trim() || `مرحباً ${state.settings?.storeName || 'زينة'} 👋`;
-    const text = `${greet}\nأرغب بإتمام الطلب رقم ${orderNo}:\n${lines.join('\n')}\n\nالمجموع: ${money(total)}\n\n` +
+    const text = `${greet}\nأرغب بإتمام الطلب رقم ${orderNo}:\n${lines.join('\n')}\n\nالمجموع: ${money(total)}${appliedCoupon ? `\nكوبون: ${appliedCoupon}` : ''}\n\n` +
         `بيانات العميل:\nالاسم: ${customer.name}\nالجوال: ${customer.phone}\nالمدينة: ${customer.city}\nالعنوان: ${customer.address}` +
         (customer.notes ? `\nملاحظات: ${customer.notes}` : '');
     // حفظ الطلب في Firestore (لا نمنع واتساب إن فشل الحفظ)
-    db.createOrder({ orderNo, total, customer, items: items.map(i => ({ id: i.id, name: i.name, price: i.price, qty: i.qty })) })
+    db.createOrder({ orderNo, total, customer, couponCode: appliedCoupon, items: items.map(i => ({ id: i.id, name: i.name, price: effectivePrice(i), qty: i.qty })) })
         .catch(e => console.warn('تعذّر حفظ الطلب:', e));
     window.open(`https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(text)}`, '_blank');
-    state.cart = []; renderCart(); closeCheckout(); toggleCart(false);
+    state.cart = []; state.couponCode = ''; renderCart(); closeCheckout(); toggleCart(false);
     toast('تم تجهيز طلبك — أرسليه من واتساب لإتمامه ✨');
 }
 
@@ -284,7 +294,7 @@ function initCheckoutUI() {
     <div id="checkoutModal" class="fixed inset-0 z-[55] hidden items-center justify-center p-4 bg-black/60 backdrop-blur-sm flex">
       <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl relative max-h-[90vh] overflow-y-auto">
         <button type="button" onclick="closeCheckout()" class="absolute top-4 left-4 text-stone-400 hover:text-stone-600"><i class="fa-solid fa-xmark"></i></button>
-        <h3 class="text-xl font-bold text-stone-900">بيانات التوصيل</h3>
+        <h3 class="text-xl font-bold text-stone-900">بيانات التوصيل</h3><div class="flex gap-2 my-3"><input id="checkoutCoupon" maxlength="32" placeholder="كود الخصم" class="border rounded-xl px-3 py-2 flex-1 min-w-0 uppercase"><button type="button" onclick="applyCoupon()" class="bg-rose-700 text-white px-4 rounded-xl">تطبيق</button></div>
         <p id="checkoutSummary" class="text-xs text-rose-700 font-bold mt-1 mb-4"></p>
         <form onsubmit="confirmOrder(event)" class="space-y-3">
           ${f('custName', 'الاسم', 'required maxlength="80" autocomplete="name"')}
@@ -324,8 +334,8 @@ async function adminLogin() {
 async function adminLogout() { await db.logout(); switchView('store'); }
 
 function switchAdminTab(tab) {
-    const panes = { products: 'adminProductsTab', orders: 'adminOrdersTab', settings: 'adminSettingsTab', backup: 'adminBackupTab' };
-    const btns = { products: 'tabBtnProducts', orders: 'tabBtnOrders', settings: 'tabBtnSettings', backup: 'tabBtnBackup' };
+    const panes = { products: 'adminProductsTab', orders: 'adminOrdersTab', settings: 'adminSettingsTab', backup: 'adminBackupTab', coupons: 'adminCouponsTab' };
+    const btns = { products: 'tabBtnProducts', orders: 'tabBtnOrders', settings: 'tabBtnSettings', backup: 'tabBtnBackup', coupons: 'tabBtnCoupons' };
     Object.keys(panes).forEach(k => {
         $(panes[k])?.classList.toggle('hidden', k !== tab);
         const b = $(btns[k]); if (!b) return;
@@ -334,6 +344,7 @@ function switchAdminTab(tab) {
         b.classList.toggle('border-transparent', !on); b.classList.toggle('text-stone-500', !on);
     });
     if (tab === 'backup') renderBackupInfo();
+    if(tab === 'coupons') renderCoupons();
 }
 
 function renderAdmin() {
@@ -398,6 +409,7 @@ function removeFormImage(i) { formImages.splice(i, 1); renderFormImages(); }
 function initFormUI() {
     const box = $('formImage')?.parentElement; if (!box) return;
     const inp = 'w-full px-3 py-2 border border-stone-300 rounded-xl text-sm focus:ring-2 focus:ring-rose-500 focus:outline-none';
+    box.insertAdjacentHTML('beforebegin', '<div><label class="block text-xs font-bold mb-1">سعر العرض (اختياري)</label><input type="number" min="0" id="formSalePrice" class="w-full border rounded-xl px-3 py-2" placeholder="اتركيه فارغاً دون عرض"></div>');
     box.innerHTML = `<label class="block text-xs font-bold text-stone-700 mb-1">صور القطعة (حتى ${MAX_IMAGES})</label>
       <div id="formImagesList" class="flex flex-wrap gap-3 mb-3"></div>
       <input type="file" id="formImageFile" accept="image/*" multiple onchange="handleImageFile(this)"
@@ -415,6 +427,7 @@ function openProductFormModal(p = null) {
     $('editProductId').value = p?.id || '';
     $('formModalTitle').textContent = p ? 'تعديل القطعة' : 'إضافة قطعة جديدة';
     formImages = p ? galleryOf(p) : []; renderFormImages();
+    if($('formSalePrice')) $('formSalePrice').value=p?.salePrice || '';
     if (p) {
         $('formName').value = p.name; $('formCategory').value = p.category; $('formPrice').value = p.price;
         $('formNotes').value = p.notes; $('formDescription').value = p.description;
@@ -428,9 +441,11 @@ const editProduct = id => openProductFormModal(state.products.find(p => p.id ===
 async function handleSaveProduct(e) {
     e.preventDefault();
     const data = {
+        salePrice: Number($('formSalePrice')?.value || 0),
         name: $('formName').value.trim(), category: $('formCategory').value, price: Number($('formPrice').value),
         image: formImages[0] || '', images: formImages, color: $('formColor').value.trim(), size: $('formSize').value.trim(), care: $('formCare').value.trim(), notes: $('formNotes').value.trim(), description: $('formDescription').value.trim()
     };
+    if(data.salePrice < 0 || (data.salePrice && data.salePrice >= data.price)) return toast('سعر العرض يجب أن يكون أقل من السعر الأصلي',true);
     if (!data.image) return toast('اختاري صورة واحدة على الأقل', true);
     if (formImages.join('').length > 900000) return toast('حجم الصور كبير، احذفي صورة أو اختاري أصغر', true);
     try {
@@ -754,7 +769,7 @@ function orderCard(o) {
         <a href="https://wa.me/${intlPhone(c.phone)}" target="_blank" rel="noopener" dir="ltr" class="text-green-700 underline text-xs">${esc(c.phone)}</a>
         <p class="text-xs text-stone-600 mt-1">${esc(c.city)} — ${esc(c.address)}</p>${c.notes ? `<p class="text-xs text-amber-700 mt-1">📝 ${esc(c.notes)}</p>` : ''}`
         : '<p class="text-xs text-stone-400">بدون بيانات عميل (طلب قديم)</p>'}</div>
-      <div>${(o.items || []).map(i => `<div class="flex justify-between text-xs py-1 border-b border-stone-100"><span>${esc(i.name)} ×${esc(i.qty)}</span><span>${money(i.price * i.qty)}</span></div>`).join('')}
+      <div>${(o.items || []).map(i => `<div class="flex justify-between text-xs py-1 border-b border-stone-100"><span>${esc(i.name)} ×${esc(i.qty)}</span><span>${money(effectivePrice(i) * i.qty)}</span></div>`).join('')}
         <div class="flex justify-between font-extrabold mt-2"><span>المجموع</span><span>${money(o.total)}</span></div></div>
     </div>
     <div class="flex flex-wrap gap-2 mt-4">
@@ -779,7 +794,7 @@ function printInvoice(id) {
     const st = state.settings || {}, c = o.customer || {}, name = esc(st.storeName || 'زينة');
     const date = o.createdAt ? o.createdAt.toDate().toLocaleDateString('ar') : '';
     const phone = `+${esc(WHATSAPP_NUMBER)}`;
-    const rows = (o.items || []).map((i, n) => `<tr><td>${n + 1}</td><td class="n">${esc(i.name)}</td><td>${esc(i.qty)}</td><td>${money(i.price)}</td><td>${money(i.price * i.qty)}</td></tr>`).join('');
+    const rows = (o.items || []).map((i, n) => `<tr><td>${n + 1}</td><td class="n">${esc(i.name)}</td><td>${esc(i.qty)}</td><td>${money(effectivePrice(i))}</td><td>${money(effectivePrice(i) * i.qty)}</td></tr>`).join('');
     const w = window.open('', '_blank');
     if (!w) return toast('اسمحي بالنوافذ المنبثقة في المتصفح لطباعة الفاتورة', true);
     w.document.write(`<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>فاتورة ${esc(o.orderNo)}</title>
@@ -919,6 +934,15 @@ function initBackupUI() {
     renderBackupBanner();
 }
 
+/* ---------- إدارة الكوبونات ---------- */
+function initCouponsUI() {
+ const tabs=$('tabBtnOrders')?.parentElement; if(!tabs) return;
+ tabs.insertAdjacentHTML('beforeend','<button id="tabBtnCoupons" onclick="switchAdminTab(\'coupons\')" class="pb-3 text-sm font-bold border-b-2 border-transparent text-stone-500">الكوبونات</button>');
+ $('adminOrdersTab')?.insertAdjacentHTML('afterend',`<section id="adminCouponsTab" class="hidden bg-white rounded-2xl p-5 space-y-4"><h3 class="font-bold">إدارة كوبونات الخصم</h3><form id="couponForm" class="flex flex-wrap gap-2"><input id="couponCode" required maxlength="32" placeholder="الكود" class="border rounded-lg p-2"><select id="couponType" class="border rounded-lg p-2"><option value="percent">نسبة %</option><option value="fixed">مبلغ ثابت</option></select><input id="couponValue" required type="number" min="1" placeholder="القيمة" class="border rounded-lg p-2 w-24"><input id="couponExpires" type="date" class="border rounded-lg p-2"><button class="bg-rose-700 text-white rounded-lg px-4">إضافة</button></form><div id="couponList" class="space-y-2"></div></section>`);
+ $('couponForm')?.addEventListener('submit',async e=>{e.preventDefault();const code=$('couponCode').value.trim().toUpperCase(),type=$('couponType').value,value=Number($('couponValue').value),expires=$('couponExpires').value;if(!/^[A-Z0-9_-]{3,32}$/.test(code)||!Number.isFinite(value)||value<=0||(type==='percent'&&value>100))return toast('تحققي من الكود والقيمة',true);const coupons=[...(state.settings?.coupons||[])];if(coupons.some(c=>c.code===code))return toast('الكود موجود',true);coupons.push({code,type,value,expires,active:true});try{await db.saveSettings({coupons});$('couponForm').reset();toast('تمت إضافة الكوبون')}catch{toast('تعذر الحفظ',true)}});
+}
+function renderCoupons(){const el=$('couponList');if(!el)return;el.innerHTML=(state.settings?.coupons||[]).map(c=>`<div class="flex justify-between border rounded-lg p-3"><span>${esc(c.code)} — ${esc(c.value)} ${c.type==='percent'?'%':esc(CURRENCY)} ${c.active?'':'(معطل)'}</span><button class="text-rose-700" onclick="toggleCoupon('${esc(c.code)}')">تفعيل / تعطيل</button></div>`).join('')||'لا توجد كوبونات';}
+async function toggleCoupon(code){const coupons=(state.settings?.coupons||[]).map(c=>c.code===code?{...c,active:!c.active}:c);try{await db.saveSettings({coupons})}catch{toast('تعذر التحديث',true)}}
 /* ---------- التشغيل ---------- */
 document.addEventListener('keydown', e => {
     if (e.key !== 'Escape') return;
@@ -957,7 +981,7 @@ db.onAuth(user => {
 
 const wa = $('whatsappFooterLink');
 if (wa) wa.href = `https://wa.me/${WHATSAPP_NUMBER}`;   // تُحدَّث لاحقاً من الإعدادات
-if (ADMIN_PAGE) { initFormUI(); initOrdersUI(); initSettingsUI(); initBackupUI(); }
+if (ADMIN_PAGE) { initFormUI(); initOrdersUI(); initSettingsUI(); initBackupUI(); initCouponsUI(); }
 else {
     // المتجر للزبائن فقط: نزيل أي أثر للوحة التحكم من الصفحة
     ['adminView', 'adminAuthModal', 'productFormModal'].forEach(id => $(id)?.remove());
@@ -972,4 +996,4 @@ Object.assign(window, { switchView, filterCategory, handleSearch, openProductMod
     recommendProduct, addToCart, changeQuantity, removeFromCart, toggleCart, checkoutViaWhatsApp, openAdminModal,
     closeAdminAuthModal, adminLogin, adminLogout, switchAdminTab, openProductFormModal, closeProductFormModal,
     editProduct, handleSaveProduct, deleteProduct, seedDemo, handleImageFile, makeMainImage, removeFormImage, confirmOrder, closeCheckout,
-    shareProduct, copyProductLink, downloadBackup, downloadOrdersCsv, addCat, renameCat, moveCat, removeCat, handleHero, removeHero, markDirty, handleLogo, handleBanners, removeLogo, removeBanner, saveSettings, setStatus, setOrderFilter, printInvoice });
+    shareProduct, copyProductLink, applyCoupon, toggleCoupon, downloadBackup, downloadOrdersCsv, addCat, renameCat, moveCat, removeCat, handleHero, removeHero, markDirty, handleLogo, handleBanners, removeLogo, removeBanner, saveSettings, setStatus, setOrderFilter, printInvoice });
