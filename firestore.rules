@@ -5,12 +5,20 @@ service cloud.firestore {
     function isAdmin() {
       return request.auth != null && request.auth.token.email == 'admin@example.com';
     }
+    match /settings/{id} {
+      allow read: if true;
+      allow write: if isAdmin() && id == 'site';
+    }
     match /products/{id} {
       allow read: if true;
       allow write: if isAdmin();
     }
     match /orders/{id} {
-      allow create: if request.resource.data.keys().hasOnly(['orderNo', 'items', 'total', 'createdAt'])
+      allow create: if request.resource.data.keys().hasOnly(['orderNo', 'items', 'total', 'customer', 'couponCode', 'createdAt'])
+                    && request.resource.data.customer is map
+                    && request.resource.data.customer.keys().hasOnly(['name','phone','city','address','notes'])
+                    && request.resource.data.couponCode is string
+                    && request.resource.data.couponCode.size() <= 32
                     && request.resource.data.items is list
                     && request.resource.data.items.size() > 0
                     && request.resource.data.items.size() <= 50
