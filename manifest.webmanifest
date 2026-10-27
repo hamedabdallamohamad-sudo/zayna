@@ -1,0 +1,18 @@
+{
+  "id": "./",
+  "name": "زينة | Zayna",
+  "short_name": "زينة",
+  "description": "إكسسوارات نسائية أنيقة",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#1c1917",
+  "theme_color": "#1F2A44",
+  "lang": "ar",
+  "dir": "rtl",
+  "icons": [
+    { "src": "images/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "images/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

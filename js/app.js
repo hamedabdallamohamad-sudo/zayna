@@ -196,6 +196,8 @@ function toggleCart(open = null) {
     }
 }
 
+// رابط صفحة التتبع (بجانب الصفحة الحالية) برمز طويل لا يُخمَّن
+const trackUrl = t => `${location.origin}${location.pathname.replace(/[^/]*$/, '')}track.html?t=${t}`;
 const CUSTOMER_KEY = 'zayna_customer';
 const COUNTRY_CODE = '249'; // رمز الدولة لتحويل الأرقام المحلية (السودان)
 const intlPhone = p => { let d = String(p).replace(/\D/g, ''); if (d.startsWith('00')) d = d.slice(2); else if (d.startsWith('0')) d = COUNTRY_CODE + d.slice(1); return d; };
@@ -224,13 +226,14 @@ function confirmOrder(e) {
     try { localStorage.setItem(CUSTOMER_KEY, JSON.stringify({ name: customer.name, phone: customer.phone, city: customer.city, address: customer.address })); } catch {}
     const total = items.reduce((s, i) => s + i.price * i.qty, 0);
     const orderNo = 'Z-' + Date.now().toString(36).toUpperCase();
+    const trackId = db.newToken();
     const lines = items.map(i => `• ${i.name} ×${i.qty} = ${money(i.price * i.qty)}`);
     const greet = state.settings?.orderGreeting?.trim() || `مرحباً ${state.settings?.storeName || 'زينة'} 👋`;
     const text = `${greet}\nأرغب بإتمام الطلب رقم ${orderNo}:\n${lines.join('\n')}\n\nالمجموع: ${money(total)}\n\n` +
         `بيانات العميل:\nالاسم: ${customer.name}\nالجوال: ${customer.phone}\nالمدينة: ${customer.city}\nالعنوان: ${customer.address}` +
-        (customer.notes ? `\nملاحظات: ${customer.notes}` : '');
+        (customer.notes ? `\nملاحظات: ${customer.notes}` : '') + `\n\nرابط تتبع الطلب:\n${trackUrl(trackId)}`;
     // حفظ الطلب في Firestore (لا نمنع واتساب إن فشل الحفظ)
-    db.createOrder({ orderNo, total, customer, items: items.map(i => ({ id: i.id, name: i.name, price: i.price, qty: i.qty })) })
+    db.createOrder({ orderNo, total, customer, trackId, items: items.map(i => ({ id: i.id, name: i.name, price: i.price, qty: i.qty })) })
         .catch(e => console.warn('تعذّر حفظ الطلب:', e));
     window.open(`https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(text)}`, '_blank');
     state.cart = []; renderCart(); closeCheckout(); toggleCart(false);
@@ -297,8 +300,8 @@ async function adminLogin() {
 async function adminLogout() { await db.logout(); switchView('store'); }
 
 function switchAdminTab(tab) {
-    const panes = { products: 'adminProductsTab', orders: 'adminOrdersTab', settings: 'adminSettingsTab' };
-    const btns = { products: 'tabBtnProducts', orders: 'tabBtnOrders', settings: 'tabBtnSettings' };
+    const panes = { products: 'adminProductsTab', orders: 'adminOrdersTab', settings: 'adminSettingsTab', backup: 'adminBackupTab' };
+    const btns = { products: 'tabBtnProducts', orders: 'tabBtnOrders', settings: 'tabBtnSettings', backup: 'tabBtnBackup' };
     Object.keys(panes).forEach(k => {
         $(panes[k])?.classList.toggle('hidden', k !== tab);
         const b = $(btns[k]); if (!b) return;
@@ -306,10 +309,12 @@ function switchAdminTab(tab) {
         b.classList.toggle('border-rose-600', on); b.classList.toggle('text-rose-800', on);
         b.classList.toggle('border-transparent', !on); b.classList.toggle('text-stone-500', !on);
     });
+    if (tab === 'backup') renderBackupInfo();
 }
 
 function renderAdmin() {
     if (!ADMIN_PAGE) return;
+    renderBackupBanner();
     $('statTotalProducts').textContent = state.products.length;
     $('statTotalOrders').textContent = state.orders.length;
     $('statTotalSales').textContent = money(state.orders.filter(o => o.status !== 'cancelled').reduce((s, o) => s + (o.total || 0), 0));
@@ -685,7 +690,10 @@ const STATUS = {
 };
 const stOf = o => STATUS[o.status] ? o.status : 'new';
 let orderFilter = 'all', ordersReady = false;
-const waLink = o => `https://wa.me/${intlPhone(o.customer?.phone || '')}?text=${encodeURIComponent(`مرحباً ${o.customer?.name || ''} 👋\nطلبك رقم ${o.orderNo} حالته الآن: ${STATUS[stOf(o)][0]}`)}`;
+const waLink = o => {
+    const track = o.trackId ? `\nتتبعي طلبك من هنا:\n${trackUrl(o.trackId)}` : '';
+    return `https://wa.me/${intlPhone(o.customer?.phone || '')}?text=${encodeURIComponent(`مرحباً ${o.customer?.name || ''} 👋\nطلبك رقم ${o.orderNo} حالته الآن: ${STATUS[stOf(o)][0]}${track}`)}`;
+};
 
 function initOrdersUI() {
     const tab = $('adminOrdersTab'); if (!tab) return;
@@ -711,6 +719,7 @@ function orderCard(o) {
     </div>
     <div class="flex flex-wrap gap-2 mt-4">
       <button onclick="printInvoice('${esc(o.id)}')" class="inline-flex items-center gap-1.5 bg-stone-900 hover:bg-rose-700 text-white text-xs font-bold px-4 py-2 rounded-xl transition"><i class="fa-solid fa-file-invoice"></i> فاتورة / طباعة</button>
+      <button onclick="copyTrackLink('${esc(o.id)}')" class="inline-flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-4 py-2 rounded-xl transition"><i class="fa-solid fa-link"></i> رابط التتبع</button>
       ${c ? `<a href="${waLink(o)}" target="_blank" rel="noopener" class="inline-flex items-center gap-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-bold px-4 py-2 rounded-xl transition"><i class="fa-brands fa-whatsapp"></i> مراسلة العميل</a>` : ''}
     </div>
     </div>`;
@@ -780,8 +789,124 @@ function printInvoice(id) {
 }
 const setOrderFilter = k => { orderFilter = k; renderOrders(); };
 async function setStatus(id, status) {
-    try { await db.updateOrder(id, { status }); toast('تم تحديث حالة الطلب'); }
+    const o = state.orders.find(x => x.id === id); if (!o) return;
+    try { await db.setOrderStatus(o, status); toast('تم تحديث حالة الطلب'); }
     catch { toast('تعذّر تحديث الحالة', true); }
+}
+async function copyTrackLink(id) {
+    const o = state.orders.find(x => x.id === id); if (!o) return;
+    try {
+        const url = trackUrl(o.trackId || await db.ensureTracking(o, stOf(o)));
+        try { await navigator.clipboard.writeText(url); toast('تم نسخ رابط التتبع ✓ — أرسليه للزبونة'); }
+        catch { window.prompt('انسخي رابط التتبع:', url); }
+    } catch { toast('تعذّر إنشاء رابط التتبع — تأكدي من نشر قواعد Firestore الجديدة', true); }
+}
+
+/* ---------- النسخة الاحتياطية ---------- */
+const BK_KEY = 'zayna_last_backup';
+const lastBackup = () => { try { return Number(localStorage.getItem(BK_KEY)) || 0; } catch { return 0; } };
+const today = () => new Date().toISOString().slice(0, 10);
+const fmtSize = n => n > 1048576 ? `${(n / 1048576).toFixed(1)} ميغابايت` : `${Math.max(1, Math.round(n / 1024))} كيلوبايت`;
+const tsISO = t => t?.toDate ? t.toDate().toISOString() : (t ?? null);
+
+function saveFile(content, name, type) {
+    const url = URL.createObjectURL(new Blob([content], { type }));
+    const a = document.createElement('a'); a.href = url; a.download = name; document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+function backupJSON(withImages) {
+    const data = {
+        app: 'zayna-store', version: 1, exportedAt: new Date().toISOString(), includesImages: withImages,
+        settings: state.settings || {},
+        products: state.products.map(p => ({ ...p, createdAt: tsISO(p.createdAt) })),
+        orders: state.orders.map(o => ({ ...o, createdAt: tsISO(o.createdAt) }))
+    };
+    // بدون الصور: تُحذف الصور المخزّنة داخل القاعدة (الشعار والبنرات وصور المنتجات)، وتبقى الروابط وأسماء الملفات
+    return JSON.stringify(data, (k, v) => (!withImages && typeof v === 'string' && v.startsWith('data:image/')) ? '' : v, 1);
+}
+function downloadBackup() {
+    const withImages = $('bkImages')?.checked !== false;
+    saveFile(backupJSON(withImages), `zayna-backup-${today()}.json`, 'application/json');
+    try { localStorage.setItem(BK_KEY, String(Date.now())); } catch {}
+    renderBackupBanner(); toast('تم تنزيل النسخة الاحتياطية — احفظيها خارج مجلد المشروع');
+}
+const csvCell = (v, raw = false) => {
+    let s = String(v ?? '').replace(/\r?\n/g, ' ');
+    if (!raw && /^[=+\-@]/.test(s)) s = "'" + s;   // حماية من تنفيذ صيغ Excel
+    return `"${s.replace(/"/g, '""')}"`;
+};
+function downloadOrdersCsv() {
+    if (!state.orders.length) return toast('لا توجد طلبات لتصديرها', true);
+    const head = ['رقم الطلب', 'التاريخ', 'الحالة', 'الاسم', 'الجوال', 'المدينة', 'العنوان', 'ملاحظات', 'المنتجات', 'المجموع'];
+    const rows = state.orders.map(o => {
+        const c = o.customer || {}, phone = String(c.phone || '').replace(/[^\d+]/g, '');
+        return [csvCell(o.orderNo), csvCell(o.createdAt?.toDate ? o.createdAt.toDate().toLocaleString('en-GB') : ''), csvCell(STATUS[stOf(o)][0]),
+            csvCell(c.name), phone ? csvCell(`="${phone}"`, true) : '""', csvCell(c.city), csvCell(c.address), csvCell(c.notes),
+            csvCell((o.items || []).map(i => `${i.name} ×${i.qty}`).join(' | ')), csvCell(o.total, true)];
+    });
+    saveFile('\ufeff' + [head.map(h => csvCell(h)), ...rows].map(r => r.join(',')).join('\r\n'), `zayna-orders-${today()}.csv`, 'text/csv;charset=utf-8');
+    toast('تم تنزيل ملف الطلبات (يفتح في Excel)');
+}
+function renderBackupInfo() {
+    const el = $('bkInfo'); if (!el) return;
+    el.textContent = `${state.products.length} منتج • ${state.orders.length} طلب • الحجم التقريبي: مع الصور ${fmtSize(backupJSON(true).length)}، بدون الصور ${fmtSize(backupJSON(false).length)}`;
+    renderBackupBanner();
+}
+function renderBackupBanner() {
+    const t = lastBackup(), days = t ? Math.floor((Date.now() - t) / 864e5) : null, due = days === null || days >= 7;
+    if ($('backupBanner')) {
+        $('backupBanner').classList.toggle('hidden', !due);
+        if (due) $('backupBannerText').textContent = days === null ? 'لم تنزّلي نسخة احتياطية من متجرك بعد' : `آخر نسخة احتياطية كانت قبل ${days} يوم`;
+    }
+    if ($('bkLast')) $('bkLast').textContent = t ? `آخر نسخة: ${new Date(t).toLocaleString('ar')}` : 'لم تُنزَّل نسخة بعد';
+}
+function initBackupUI() {
+    const prev = $('tabBtnSettings') || $('tabBtnOrders'), after = $('adminSettingsTab') || $('adminOrdersTab'); if (!prev || !after) return;
+    prev.insertAdjacentHTML('afterend', `<button id="tabBtnBackup" onclick="switchAdminTab('backup')" class="${$('tabBtnOrders').className}">نسخة احتياطية</button>`);
+    const btn = 'font-bold px-6 py-3 rounded-xl transition text-sm';
+    after.insertAdjacentHTML('afterend', `
+    <div id="adminBackupTab" class="hidden space-y-5 max-w-3xl">
+      <div class="bg-amber-50 border border-amber-200 text-amber-900 rounded-2xl p-4 text-sm leading-relaxed"><b>تنبيه خصوصية:</b> الملف يحتوي أسماء الزبونات وجوالاتهن وعناوينهن. احفظيه على جهازك أو في مكان خاص، <b>ولا ترفعيه إلى GitHub أبداً</b>.</div>
+      <section class="bg-white rounded-2xl border border-stone-200 shadow-sm p-6 space-y-4">
+        <h4 class="font-extrabold text-stone-900">نسخة كاملة للمتجر</h4>
+        <p class="text-sm text-stone-600">ملف واحد فيه المنتجات والطلبات وإعدادات المتجر (الشعار والبنرات والفئات ووسائل التواصل).</p>
+        <label class="flex items-center gap-2 text-sm font-bold"><input id="bkImages" type="checkbox" checked class="w-4 h-4"> تضمين الصور (يكبر الملف، وإلغاؤه ينتج نسخة خفيفة)</label>
+        <p id="bkInfo" class="text-xs text-stone-500"></p>
+        <p id="bkLast" class="text-xs font-bold text-rose-700"></p>
+        <button onclick="downloadBackup()" class="${btn} bg-stone-900 hover:bg-rose-700 text-white"><i class="fa-solid fa-download ml-1"></i> تنزيل نسخة كاملة</button>
+      </section>
+      <section class="bg-white rounded-2xl border border-stone-200 shadow-sm p-6 space-y-3">
+        <h4 class="font-extrabold text-stone-900">الطلبات لـ Excel</h4>
+        <p class="text-sm text-stone-600">ملف يفتح مباشرة في Excel، فيه رقم الطلب والتاريخ والحالة وبيانات العميلة والمنتجات والمجموع، للمحاسبة.</p>
+        <button onclick="downloadOrdersCsv()" class="${btn} bg-green-600 hover:bg-green-700 text-white"><i class="fa-solid fa-file-excel ml-1"></i> تنزيل الطلبات (Excel)</button>
+      </section>
+    </div>`);
+    $('adminView')?.insertAdjacentHTML('afterbegin', `
+    <div id="backupBanner" class="hidden mb-5 bg-amber-50 border border-amber-300 text-amber-900 rounded-2xl px-5 py-3 flex flex-wrap items-center justify-between gap-3 text-sm">
+      <span><i class="fa-solid fa-triangle-exclamation ml-1"></i><span id="backupBannerText"></span> — يُنصح بنسخة أسبوعية.</span>
+      <button onclick="switchAdminTab('backup')" class="bg-amber-600 hover:bg-amber-700 text-white font-bold px-4 py-1.5 rounded-lg text-xs">نسخة الآن</button>
+    </div>`);
+    renderBackupBanner();
+}
+
+/* ---------- تطبيق الجوال (PWA) ---------- */
+let installEvt = null;
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; $('installBtn')?.classList.remove('hidden'); });
+window.addEventListener('appinstalled', () => { installEvt = null; $('installBtn')?.classList.add('hidden'); });
+async function installApp() {
+    if (installEvt) { installEvt.prompt(); await installEvt.userChoice?.catch(() => {}); installEvt = null; $('installBtn')?.classList.add('hidden'); }
+    else alert('للتثبيت على الآيفون: اضغطي زر المشاركة في Safari ثم «إضافة إلى الشاشة الرئيسية».');
+}
+function initPWA() {
+    document.head.insertAdjacentHTML('beforeend', `<link rel="manifest" href="${ADMIN_PAGE ? 'admin' : 'manifest'}.webmanifest"><link rel="apple-touch-icon" href="images/icon-192.png">
+      <meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="${ADMIN_PAGE ? 'لوحة زينة' : 'زينة'}">`);
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+    const label = ADMIN_PAGE ? 'تثبيت لوحة التحكم' : 'تثبيت التطبيق على جوالك';
+    const btn = `<button id="installBtn" onclick="installApp()" class="hidden ${ADMIN_PAGE ? 'bg-stone-800 hover:bg-stone-700 text-stone-200 px-4 py-2.5 rounded-xl font-bold text-sm border border-stone-700' : 'mt-3 text-xs bg-stone-800 hover:bg-stone-700 text-amber-300 border border-amber-500/30 px-4 py-2 rounded-lg inline-flex items-center gap-2'} transition"><i class="fa-solid fa-mobile-screen-button"></i> ${label}</button>`;
+    if (ADMIN_PAGE) $('adminView')?.querySelector('button[onclick="adminLogout()"]')?.parentElement?.insertAdjacentHTML('beforeend', btn);
+    else ($('socialLinks') || $('whatsappFooterLink'))?.insertAdjacentHTML('afterend', btn);
+    const ios = /iphone|ipad|ipod/i.test(navigator.userAgent), standalone = window.matchMedia?.('(display-mode: standalone)')?.matches || navigator.standalone;
+    if (installEvt || (ios && !standalone)) $('installBtn')?.classList.remove('hidden');
 }
 
 /* ---------- التشغيل ---------- */
@@ -822,7 +947,7 @@ db.onAuth(user => {
 
 const wa = $('whatsappFooterLink');
 if (wa) wa.href = `https://wa.me/${WHATSAPP_NUMBER}`;   // تُحدَّث لاحقاً من الإعدادات
-if (ADMIN_PAGE) { initFormUI(); initOrdersUI(); initSettingsUI(); }
+if (ADMIN_PAGE) { initFormUI(); initOrdersUI(); initSettingsUI(); initBackupUI(); }
 else {
     // المتجر للزبائن فقط: نزيل أي أثر للوحة التحكم من الصفحة
     ['adminView', 'adminAuthModal', 'productFormModal'].forEach(id => $(id)?.remove());
@@ -830,6 +955,7 @@ else {
     initCheckoutUI(); initSiteUI(); initCartBar();
     $('productModal')?.firstElementChild?.classList.add('max-h-[90vh]', 'overflow-y-auto');   // نافذة المنتج قابلة للتمرير على الجوال
 }
+initPWA();
 filterCategory('all'); renderCart();
 
 // index.html يستدعي الدوال عبر onclick، فنعرضها عالمياً
@@ -837,4 +963,4 @@ Object.assign(window, { switchView, filterCategory, handleSearch, openProductMod
     recommendProduct, addToCart, changeQuantity, removeFromCart, toggleCart, checkoutViaWhatsApp, openAdminModal,
     closeAdminAuthModal, adminLogin, adminLogout, switchAdminTab, openProductFormModal, closeProductFormModal,
     editProduct, handleSaveProduct, deleteProduct, seedDemo, handleImageFile, makeMainImage, removeFormImage, confirmOrder, closeCheckout,
-    shareProduct, copyProductLink, addCat, renameCat, moveCat, removeCat, handleHero, removeHero, markDirty, handleLogo, handleBanners, removeLogo, removeBanner, saveSettings, setStatus, setOrderFilter, printInvoice });
+    shareProduct, copyProductLink, copyTrackLink, installApp, downloadBackup, downloadOrdersCsv, addCat, renameCat, moveCat, removeCat, handleHero, removeHero, markDirty, handleLogo, handleBanners, removeLogo, removeBanner, saveSettings, setStatus, setOrderFilter, printInvoice });
