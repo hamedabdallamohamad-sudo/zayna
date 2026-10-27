@@ -196,8 +196,6 @@ function toggleCart(open = null) {
     }
 }
 
-// رابط صفحة التتبع (بجانب الصفحة الحالية) برمز طويل لا يُخمَّن
-const trackUrl = t => `${location.origin}${location.pathname.replace(/[^/]*$/, '')}track.html?t=${t}`;
 const CUSTOMER_KEY = 'zayna_customer';
 const COUNTRY_CODE = '249'; // رمز الدولة لتحويل الأرقام المحلية (السودان)
 const intlPhone = p => { let d = String(p).replace(/\D/g, ''); if (d.startsWith('00')) d = d.slice(2); else if (d.startsWith('0')) d = COUNTRY_CODE + d.slice(1); return d; };
@@ -226,14 +224,13 @@ function confirmOrder(e) {
     try { localStorage.setItem(CUSTOMER_KEY, JSON.stringify({ name: customer.name, phone: customer.phone, city: customer.city, address: customer.address })); } catch {}
     const total = items.reduce((s, i) => s + i.price * i.qty, 0);
     const orderNo = 'Z-' + Date.now().toString(36).toUpperCase();
-    const trackId = db.newToken();
     const lines = items.map(i => `• ${i.name} ×${i.qty} = ${money(i.price * i.qty)}`);
     const greet = state.settings?.orderGreeting?.trim() || `مرحباً ${state.settings?.storeName || 'زينة'} 👋`;
     const text = `${greet}\nأرغب بإتمام الطلب رقم ${orderNo}:\n${lines.join('\n')}\n\nالمجموع: ${money(total)}\n\n` +
         `بيانات العميل:\nالاسم: ${customer.name}\nالجوال: ${customer.phone}\nالمدينة: ${customer.city}\nالعنوان: ${customer.address}` +
-        (customer.notes ? `\nملاحظات: ${customer.notes}` : '') + `\n\nرابط تتبع الطلب:\n${trackUrl(trackId)}`;
+        (customer.notes ? `\nملاحظات: ${customer.notes}` : '');
     // حفظ الطلب في Firestore (لا نمنع واتساب إن فشل الحفظ)
-    db.createOrder({ orderNo, total, customer, trackId, items: items.map(i => ({ id: i.id, name: i.name, price: i.price, qty: i.qty })) })
+    db.createOrder({ orderNo, total, customer, items: items.map(i => ({ id: i.id, name: i.name, price: i.price, qty: i.qty })) })
         .catch(e => console.warn('تعذّر حفظ الطلب:', e));
     window.open(`https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(text)}`, '_blank');
     state.cart = []; renderCart(); closeCheckout(); toggleCart(false);
@@ -690,10 +687,7 @@ const STATUS = {
 };
 const stOf = o => STATUS[o.status] ? o.status : 'new';
 let orderFilter = 'all', ordersReady = false;
-const waLink = o => {
-    const track = o.trackId ? `\nتتبعي طلبك من هنا:\n${trackUrl(o.trackId)}` : '';
-    return `https://wa.me/${intlPhone(o.customer?.phone || '')}?text=${encodeURIComponent(`مرحباً ${o.customer?.name || ''} 👋\nطلبك رقم ${o.orderNo} حالته الآن: ${STATUS[stOf(o)][0]}${track}`)}`;
-};
+const waLink = o => `https://wa.me/${intlPhone(o.customer?.phone || '')}?text=${encodeURIComponent(`مرحباً ${o.customer?.name || ''} 👋\nطلبك رقم ${o.orderNo} حالته الآن: ${STATUS[stOf(o)][0]}`)}`;
 
 function initOrdersUI() {
     const tab = $('adminOrdersTab'); if (!tab) return;
@@ -719,7 +713,6 @@ function orderCard(o) {
     </div>
     <div class="flex flex-wrap gap-2 mt-4">
       <button onclick="printInvoice('${esc(o.id)}')" class="inline-flex items-center gap-1.5 bg-stone-900 hover:bg-rose-700 text-white text-xs font-bold px-4 py-2 rounded-xl transition"><i class="fa-solid fa-file-invoice"></i> فاتورة / طباعة</button>
-      <button onclick="copyTrackLink('${esc(o.id)}')" class="inline-flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-4 py-2 rounded-xl transition"><i class="fa-solid fa-link"></i> رابط التتبع</button>
       ${c ? `<a href="${waLink(o)}" target="_blank" rel="noopener" class="inline-flex items-center gap-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-bold px-4 py-2 rounded-xl transition"><i class="fa-brands fa-whatsapp"></i> مراسلة العميل</a>` : ''}
     </div>
     </div>`;
@@ -789,17 +782,8 @@ function printInvoice(id) {
 }
 const setOrderFilter = k => { orderFilter = k; renderOrders(); };
 async function setStatus(id, status) {
-    const o = state.orders.find(x => x.id === id); if (!o) return;
-    try { await db.setOrderStatus(o, status); toast('تم تحديث حالة الطلب'); }
+    try { await db.updateOrder(id, { status }); toast('تم تحديث حالة الطلب'); }
     catch { toast('تعذّر تحديث الحالة', true); }
-}
-async function copyTrackLink(id) {
-    const o = state.orders.find(x => x.id === id); if (!o) return;
-    try {
-        const url = trackUrl(o.trackId || await db.ensureTracking(o, stOf(o)));
-        try { await navigator.clipboard.writeText(url); toast('تم نسخ رابط التتبع ✓ — أرسليه للزبونة'); }
-        catch { window.prompt('انسخي رابط التتبع:', url); }
-    } catch { toast('تعذّر إنشاء رابط التتبع — تأكدي من نشر قواعد Firestore الجديدة', true); }
 }
 
 /* ---------- النسخة الاحتياطية ---------- */
@@ -889,26 +873,6 @@ function initBackupUI() {
     renderBackupBanner();
 }
 
-/* ---------- تطبيق الجوال (PWA) ---------- */
-let installEvt = null;
-window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; $('installBtn')?.classList.remove('hidden'); });
-window.addEventListener('appinstalled', () => { installEvt = null; $('installBtn')?.classList.add('hidden'); });
-async function installApp() {
-    if (installEvt) { installEvt.prompt(); await installEvt.userChoice?.catch(() => {}); installEvt = null; $('installBtn')?.classList.add('hidden'); }
-    else alert('للتثبيت على الآيفون: اضغطي زر المشاركة في Safari ثم «إضافة إلى الشاشة الرئيسية».');
-}
-function initPWA() {
-    document.head.insertAdjacentHTML('beforeend', `<link rel="manifest" href="${ADMIN_PAGE ? 'admin' : 'manifest'}.webmanifest"><link rel="apple-touch-icon" href="images/icon-192.png">
-      <meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="${ADMIN_PAGE ? 'لوحة زينة' : 'زينة'}">`);
-    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
-    const label = ADMIN_PAGE ? 'تثبيت لوحة التحكم' : 'تثبيت التطبيق على جوالك';
-    const btn = `<button id="installBtn" onclick="installApp()" class="hidden ${ADMIN_PAGE ? 'bg-stone-800 hover:bg-stone-700 text-stone-200 px-4 py-2.5 rounded-xl font-bold text-sm border border-stone-700' : 'mt-3 text-xs bg-stone-800 hover:bg-stone-700 text-amber-300 border border-amber-500/30 px-4 py-2 rounded-lg inline-flex items-center gap-2'} transition"><i class="fa-solid fa-mobile-screen-button"></i> ${label}</button>`;
-    if (ADMIN_PAGE) $('adminView')?.querySelector('button[onclick="adminLogout()"]')?.parentElement?.insertAdjacentHTML('beforeend', btn);
-    else ($('socialLinks') || $('whatsappFooterLink'))?.insertAdjacentHTML('afterend', btn);
-    const ios = /iphone|ipad|ipod/i.test(navigator.userAgent), standalone = window.matchMedia?.('(display-mode: standalone)')?.matches || navigator.standalone;
-    if (installEvt || (ios && !standalone)) $('installBtn')?.classList.remove('hidden');
-}
-
 /* ---------- التشغيل ---------- */
 document.addEventListener('keydown', e => {
     if (e.key !== 'Escape') return;
@@ -955,7 +919,6 @@ else {
     initCheckoutUI(); initSiteUI(); initCartBar();
     $('productModal')?.firstElementChild?.classList.add('max-h-[90vh]', 'overflow-y-auto');   // نافذة المنتج قابلة للتمرير على الجوال
 }
-initPWA();
 filterCategory('all'); renderCart();
 
 // index.html يستدعي الدوال عبر onclick، فنعرضها عالمياً
@@ -963,4 +926,4 @@ Object.assign(window, { switchView, filterCategory, handleSearch, openProductMod
     recommendProduct, addToCart, changeQuantity, removeFromCart, toggleCart, checkoutViaWhatsApp, openAdminModal,
     closeAdminAuthModal, adminLogin, adminLogout, switchAdminTab, openProductFormModal, closeProductFormModal,
     editProduct, handleSaveProduct, deleteProduct, seedDemo, handleImageFile, makeMainImage, removeFormImage, confirmOrder, closeCheckout,
-    shareProduct, copyProductLink, copyTrackLink, installApp, downloadBackup, downloadOrdersCsv, addCat, renameCat, moveCat, removeCat, handleHero, removeHero, markDirty, handleLogo, handleBanners, removeLogo, removeBanner, saveSettings, setStatus, setOrderFilter, printInvoice });
+    shareProduct, copyProductLink, downloadBackup, downloadOrdersCsv, addCat, renameCat, moveCat, removeCat, handleHero, removeHero, markDirty, handleLogo, handleBanners, removeLogo, removeBanner, saveSettings, setStatus, setOrderFilter, printInvoice });
