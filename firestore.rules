@@ -1,9 +1,20 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // ← ضعي بريد حساب المدير هنا
     function isAdmin() {
-      return request.auth != null && request.auth.token.email == 'admin@example.com';
+      return request.auth != null && request.auth.token.email == 'hameedbrns@gmail.com';
+    }
+    function validCustomer(c) {
+      return c is map
+          && c.keys().hasOnly(['name', 'phone', 'city', 'address', 'notes'])
+          && c.name is string && c.name.size() > 0 && c.name.size() <= 80
+          && c.phone is string && c.phone.size() >= 6 && c.phone.size() <= 20
+          && c.city is string && c.city.size() > 0 && c.city.size() <= 60
+          && c.address is string && c.address.size() > 0 && c.address.size() <= 200
+          && c.notes is string && c.notes.size() <= 300;
+    }
+    function validToken(t) {
+      return t is string && t.size() >= 20 && t.size() <= 64;
     }
     match /settings/{id} {
       allow read: if true;
@@ -13,18 +24,42 @@ service cloud.firestore {
       allow read: if true;
       allow write: if isAdmin();
     }
+    match /settings/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
     match /orders/{id} {
+<<<<<<< HEAD
+      allow create: if request.resource.data.keys().hasOnly(['orderNo', 'items', 'total', 'createdAt', 'customer', 'trackId'])
+=======
       allow create: if request.resource.data.keys().hasOnly(['orderNo', 'items', 'total', 'customer', 'couponCode', 'createdAt'])
                     && request.resource.data.customer is map
                     && request.resource.data.customer.keys().hasOnly(['name','phone','city','address','notes'])
                     && request.resource.data.couponCode is string
                     && request.resource.data.couponCode.size() <= 32
+>>>>>>> 7ab5af1ec08d3923116cec1e3e51b38752e95662
                     && request.resource.data.items is list
                     && request.resource.data.items.size() > 0
                     && request.resource.data.items.size() <= 50
                     && request.resource.data.total is number
-                    && request.resource.data.createdAt == request.time;
+                    && request.resource.data.createdAt == request.time
+                    && validCustomer(request.resource.data.customer)
+                    && (!('trackId' in request.resource.data) || validToken(request.resource.data.trackId));
       allow read, update, delete: if isAdmin();
+    }
+    // صفحة تتبع الطلب: القراءة بالرمز الطويل فقط (get)، ولا يمكن سرد المستندات إلا للمدير
+    match /tracking/{token} {
+      allow get: if true;
+      allow list: if isAdmin();
+      allow create: if isAdmin() || (validToken(token)
+                    && request.resource.data.keys().hasOnly(['orderNo', 'status', 'total', 'count', 'items', 'createdAt'])
+                    && request.resource.data.status == 'new'
+                    && request.resource.data.orderNo is string && request.resource.data.orderNo.size() <= 30
+                    && request.resource.data.total is number
+                    && request.resource.data.count is number
+                    && request.resource.data.items is list && request.resource.data.items.size() <= 50
+                    && request.resource.data.createdAt == request.time);
+      allow update, delete: if isAdmin();
     }
   }
 }
