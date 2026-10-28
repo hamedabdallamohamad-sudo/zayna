@@ -23,6 +23,20 @@ let formImages = [];
 const galleryOf = p => (Array.isArray(p.images) && p.images.length ? p.images : [p.image]).filter(Boolean);
 const fmt = n => Number(n || 0).toLocaleString('en-US');   // 12000 ← 12,000
 const money = n => `${fmt(n)} ${CURRENCY}`;
+// السعر الحالي هو سعر البيع الفعلي؛ oldPrice للعرض فقط.
+function offerOf(p) {
+    const price = Number(p.price), old = Number(p.oldPrice);
+    if (!Number.isFinite(price) || price < 0 || !Number.isFinite(old) || old <= price) return null;
+    const percent = Math.floor(((old - price) / old) * 100 + 1e-9);
+    return { old, percent, label: percent > 0 ? `خصم ${percent}%` : 'عرض خاص' };
+}
+function priceHTML(p) {
+    const offer = offerOf(p);
+    return `<span style="display:inline-flex;flex-wrap:wrap;align-items:baseline;gap:6px">
+      ${offer ? `<del aria-label="السعر قبل الخصم" style="font-size:13px;color:#78716c;font-weight:400">${esc(money(offer.old))}</del>` : ''}
+      <span aria-label="السعر الحالي">${esc(money(p.price))}</span>
+    </span>`;
+}
 const ONERR = "this.onerror=null;this.src='images/placeholder.svg'";
 const show = id => $(id)?.classList.remove('hidden');
 const hide = id => $(id)?.classList.add('hidden');
@@ -49,6 +63,7 @@ const card = p => `
   <div class="relative overflow-hidden aspect-square cursor-pointer" onclick="openProductModal('${esc(p.id)}')">
     <button onclick="event.stopPropagation(); shareProduct('${esc(p.id)}')" title="مشاركة عبر واتساب" class="absolute top-3 left-3 z-10 w-9 h-9 rounded-full bg-white/90 hover:bg-green-600 hover:text-white text-green-600 shadow flex items-center justify-center transition"><i class="fa-brands fa-whatsapp"></i></button>
     <img src="${img(p.image)}" alt="${esc(p.name)}" loading="lazy" onerror="${ONERR}" class="w-full h-full object-cover group-hover:scale-105 transition duration-500">
+    ${offerOf(p) ? `<span style="position:absolute;bottom:12px;right:12px;background:#be123c;color:white;padding:5px 12px;border-radius:999px;font-size:12px;font-weight:700">${offerOf(p).label}</span>` : ''}
     ${p.rating ? `<span class="absolute top-3 right-3 bg-stone-900/80 text-amber-300 text-xs font-bold px-2.5 py-1 rounded-full">★ ${esc(p.rating)}</span>` : ''}
   </div>
   <div class="p-5 flex flex-col flex-grow justify-between">
@@ -57,7 +72,7 @@ const card = p => `
       <p class="text-xs text-stone-500 mb-3 line-clamp-1"><i class="fa-solid fa-gem text-rose-600 ml-1"></i>${esc(p.notes)}</p>
     </div>
     <div class="flex items-center justify-between pt-3 border-t border-stone-100">
-      <span class="text-xl font-bold text-stone-900">${fmt(p.price)} <span class="text-xs text-stone-500 font-normal">${CURRENCY}</span></span>
+      <span class="text-xl font-bold text-stone-900">${priceHTML(p)}</span>
       <button onclick="addToCart('${esc(p.id)}')" class="bg-stone-900 hover:bg-rose-700 text-white px-3.5 py-2 rounded-xl transition flex items-center gap-1.5 text-sm font-medium shadow-md"><i class="fa-solid fa-plus"></i> إضافة</button>
     </div>
   </div>
@@ -101,7 +116,8 @@ function openProductModal(id) {
       <div>
         <span class="text-xs font-bold text-rose-700 bg-rose-50 px-2.5 py-1 rounded-full border border-rose-200/60 inline-block mb-2">${esc(CATEGORIES[p.category] || 'إكسسوار')}</span>
         <h3 class="text-2xl font-bold text-stone-900">${esc(p.name)}</h3>
-        <p class="text-rose-800 font-bold text-2xl mt-2">${fmt(p.price)} <span class="text-sm text-stone-500 font-normal">${CURRENCY}</span></p>
+        <p class="text-rose-800 font-bold text-2xl mt-2">${priceHTML(p)}</p>
+        ${offerOf(p) ? `<p class="text-sm font-bold text-rose-700 mt-2">${offerOf(p).label} — وفّري ${esc(money(offerOf(p).old - Number(p.price)))}</p>` : ''}
         <p class="text-stone-600 text-sm mt-4 leading-relaxed">${esc(p.description)}</p>
         <div class="mt-4 p-3 bg-stone-50 rounded-xl border border-stone-100">
           <span class="text-xs font-bold text-stone-700 block mb-1">الخامة والمواد:</span>
@@ -123,7 +139,7 @@ function openProductModal(id) {
 const productUrl = id => `${location.origin}${location.pathname}?p=${encodeURIComponent(id)}`;
 function shareProduct(id) {
     const p = state.products.find(x => x.id === id); if (!p) return;
-    const text = `✨ ${p.name}\nالسعر: ${money(p.price)}\nمن ${state.settings?.storeName || 'زينة'}\n${productUrl(id)}`;
+    const text = `✨ ${p.name}\n${offerOf(p) ? `قبل الخصم: ${money(offerOf(p).old)}\n${offerOf(p).label}\n` : ''}السعر: ${money(p.price)}\nمن ${state.settings?.storeName || 'زينة'}\n${productUrl(id)}`;
     window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
 }
 async function copyProductLink(id) {
@@ -318,7 +334,7 @@ function renderAdmin() {
     $('adminProductsTable').innerHTML = state.products.length ? state.products.map(p => `
     <tr><td class="p-4 font-bold text-stone-900">${esc(p.name)}</td>
     <td class="p-4">${esc(CATEGORIES[p.category] || p.category)}</td>
-    <td class="p-4">${money(p.price)}</td><td class="p-4">${p.rating ? '★ ' + esc(p.rating) : '—'}</td>
+    <td class="p-4">${priceHTML(p)}</td><td class="p-4">${p.rating ? '★ ' + esc(p.rating) : '—'}</td>
     <td class="p-4 text-center whitespace-nowrap">
       <button onclick="editProduct('${esc(p.id)}')" class="text-blue-600 hover:text-blue-800 px-2" title="تعديل"><i class="fa-solid fa-pen"></i></button>
       <button onclick="deleteProduct('${esc(p.id)}')" class="text-red-500 hover:text-red-700 px-2" title="حذف"><i class="fa-solid fa-trash-can"></i></button>
@@ -376,6 +392,12 @@ function initFormUI() {
       <input type="file" id="formImageFile" accept="image/*" multiple onchange="handleImageFile(this)"
         class="block w-full text-xs text-stone-600 file:ml-3 file:py-2 file:px-4 file:rounded-xl file:border-0 file:bg-rose-50 file:text-rose-700 file:font-bold hover:file:bg-rose-100">
       <p class="text-[11px] text-stone-400 mt-1">الأولى هي الرئيسية، وتُصغَّر الصور تلقائياً</p>`;
+    const priceBox = $('formPrice').parentElement;
+    priceBox.querySelector('label').textContent = 'سعر البيع الحالي (بعد الخصم إن وجد)';
+    if (!$('formOldPrice')) priceBox.insertAdjacentHTML('afterend', `
+      <div><label for="formOldPrice" class="block text-xs font-bold text-stone-700 mb-1">السعر قبل الخصم (اختياري)</label>
+      <input type="number" id="formOldPrice" min="0" step="0.01" placeholder="اتركيه فارغاً بدون عرض" class="${inp}">
+      <p class="text-xs text-stone-500 mt-1">يجب أن يكون أكبر من سعر البيع. امسحيه لإلغاء العرض.</p></div>`);
     const extra = document.createElement('div');
     extra.className = 'grid grid-cols-1 sm:grid-cols-3 gap-3';
     extra.innerHTML = [['formColor', 'اللون', 'ذهبي، فضي...'], ['formSize', 'المقاس / الأبعاد', 'طول السلسلة 45 سم'], ['formCare', 'العناية', 'تجنّبي الماء والعطور']]
@@ -393,6 +415,7 @@ function openProductFormModal(p = null) {
         $('formNotes').value = p.notes; $('formDescription').value = p.description;
         $('formColor').value = p.color || ''; $('formSize').value = p.size || ''; $('formCare').value = p.care || '';
     }
+    $('formOldPrice').value = p && offerOf(p) ? Number(p.oldPrice) : '';
     show('productFormModal');
 }
 const closeProductFormModal = () => hide('productFormModal');
@@ -404,6 +427,12 @@ async function handleSaveProduct(e) {
         name: $('formName').value.trim(), category: $('formCategory').value, price: Number($('formPrice').value),
         image: formImages[0] || '', images: formImages, color: $('formColor').value.trim(), size: $('formSize').value.trim(), care: $('formCare').value.trim(), notes: $('formNotes').value.trim(), description: $('formDescription').value.trim()
     };
+    const oldInput = $('formOldPrice').value.trim();
+    const oldPrice = Number(oldInput);
+    if (!Number.isFinite(data.price) || data.price < 0) return toast('أدخلي سعر بيع صحيحاً', true);
+    if (oldInput && (!Number.isFinite(oldPrice) || oldPrice <= data.price)) return toast('السعر قبل الخصم يجب أن يكون أكبر من سعر البيع الحالي', true);
+    // null يلغي العرض القديم أيضاً عند الحفظ باستخدام merge.
+    data.oldPrice = oldInput ? oldPrice : null;
     if (!data.image) return toast('اختاري صورة واحدة على الأقل', true);
     if (formImages.join('').length > 900000) return toast('حجم الصور كبير، احذفي صورة أو اختاري أصغر', true);
     try {
