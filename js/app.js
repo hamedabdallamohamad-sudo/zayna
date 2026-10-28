@@ -730,7 +730,7 @@ function renderOrders() {
 }
 function printInvoice(id) {
     const o = state.orders.find(x => x.id === id); if (!o) return;
-    const st = state.settings || {}, c = o.cust omer || {}, name = esc(st.storeName || 'زينة');
+    const st = state.settings || {}, c = o.customer || {}, name = esc(st.storeName || 'زينة');
     const date = o.createdAt ? o.createdAt.toDate().toLocaleDateString('ar') : '';
     const phone = `+${esc(WHATSAPP_NUMBER)}`;
     const rows = (o.items || []).map((i, n) => `<tr><td>${n + 1}</td><td class="n">${esc(i.name)}</td><td>${esc(i.qty)}</td><td>${money(i.price)}</td><td>${money(i.price * i.qty)}</td></tr>`).join('');
